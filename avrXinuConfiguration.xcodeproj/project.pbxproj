@@ -6,10 +6,19 @@
 	objectVersion = 46;
 	objects = {
 
+/* Begin PBXFileReference section */
+		BDA635841884889700F57AF9 /* config.l */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.lex; path = config.l; sourceTree = "<group>"; };
+		BDA63585188488A900F57AF9 /* config.y */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.yacc; path = config.y; sourceTree = "<group>"; };
+		BDA63586188488BD00F57AF9 /* Makefile */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
 /* Begin PBXGroup section */
 		BDA635791884884F00F57AF9 = {
 			isa = PBXGroup;
 			children = (
+				BDA635841884889700F57AF9 /* config.l */,
+				BDA63585188488A900F57AF9 /* config.y */,
+				BDA63586188488BD00F57AF9 /* Makefile */,
 			);
 			sourceTree = "<group>";
 		};
@@ -23,6 +32,7 @@
 			buildPhases = (
 			);
 			buildToolPath = /usr/bin/make;
+			buildWorkingDirectory = /Users/mmm/XinuV7/avrXinuConfiguration;
 			dependencies = (
 			);
 			name = avrXinuConfiguration;
