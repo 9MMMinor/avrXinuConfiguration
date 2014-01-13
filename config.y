@@ -1,20 +1,56 @@
-%token DEFBRK COLON OCTAL INTEGER IDENT CSR IVEC OVEC IINT OINT
+/*
+ *  config.y
+ *  
+ *
+ *  Modified by Michael Minor on 6/1/10.
+ *   cleaned up - removed all warnings. 10/05/11.
+ *  Original from Xinu-TCPIP-Vol2_Distribution
+ *	TCPIP-vol2.dist.tar.gz:
+ *	ftp://ftp.cs.purdue.edu/pub/comer/TCPIP-vol2.dist.tar.gz
+ *
+ */
+ 
+/*			Modification notes
+ *
+ *	Modifications are designed for the avr-gcc supported family of microprocessors.
+ *	1) Change "conf.c" output for the file to be included inline in "initialize.c"
+ *	2) Create include file "confisr.c" which adds code for interrupt service routines.
+ *	3) Change some formats for compatibility with avr-gcc
+ *	4) Change output to go to current directory. mmm 4/5/2013
+ *
+ */
+
+%token DEFBRK COLON OCTAL INTEGER IDENT CSR IVEC OVEC IRQ IINT OINT
 	INIT OPEN CLOSE	READ WRITE SEEK CNTL IS ON GETC PUTC
 %{
+#include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+	
+extern char *yytext;
+/*typedef size_t yy_size_t;*/
+extern size_t yyleng;
+	
 
 #define	NIL	(dvptr)0
 
-#define	CONFIGC		"../sys/conf.c"		/* name of .c output	*/
-#define	CONFIGH		"../h/conf.h"		/* name of .h output	*/
-#define	CONFHREF	"<conf.h>"		/* how conf.h referenced*/
+#define	CONFIGC		"conf.c"		/* name of .c output	*/
+#define	CONFIGCISR	"confisr.c"	/* name of .c output	*/	
+#define	CONFIGH		"conf.h"		/* name of .h output	*/
+#define	CONFHREF	"<conf.h>"	/* how conf.h referenced*/
 #define	CONFIGIN	"Configuration"		/* name of input file	*/
+#define CONFavrioREF "<avr/io.h>"
+#define CONFavrintREF "<avr/interrupt.h>"
+
+
+#define	IRQBASE		32
 
 FILE	*confc;
 FILE	*confh;
+FILE	*confisr;
 
 char	*dbstr;
-extern	char *malloc();
 int	ndevs = 0;
 int	currname = -1;
 int	currtname = -1;
@@ -24,6 +60,7 @@ int	brkcount = 0;
 struct	syment	{			/* symbol table			*/
 	char	*symname;
 	int	symoccurs;
+	int	symtype;
 	} symtab[250];
 
 int	nsym = 0;
@@ -34,24 +71,24 @@ char	*s;
 struct	dvtype {
 	char		*dvname;	/* device name (not used in types)*/
 	char		*dvtname;	/* type name			*/
-	int		dvtnum;		/* symbol table index of type	*/
+	int			dvtnum;		/* symbol table index of type	*/
 	char		*dvdevice;	/* device name			*/
-	int		dvcsr;		/* Control Status Register addr	*/
-	int		dvivec;		/* input interrupt vector	*/
-	int		dvovec;		/* Output interrupt vector	*/
+	int			dvcsr;		/* Control Status Register addr	*/
+	char		dvivec[20];	/* input interrupt vector	*/
+	char		dvovec[20];	/* Output interrupt vector	*/
 	char		dviint[20];	/* input interrupt routine	*/
 	char		dvoint[20];	/* output interrupt routine	*/
 	char		dvinit[20];	/* init routine name		*/
 	char		dvopen[20];	/* open routine name		*/
-	char		dvclose[20];	/* close routine name		*/
+	char		dvclose[20];/* close routine name		*/
 	char		dvread[20];	/* read routine name		*/
-	char		dvwrite[20];	/* write routine name		*/
+	char		dvwrite[20];/* write routine name		*/
 	char		dvcntl[20];	/* control routine name		*/
 	char		dvseek[20];	/* seek routine name		*/
 	char		dvgetc[20];	/* getc routine name		*/
 	char		dvputc[20];	/* putc routine name		*/
-	int		dvminor;	/* device number 0,1,...	*/
-	struct dvtype	*dvnext;	/* next node on the list	*/
+	int			dvminor;	/* device number 0,1,...	*/
+	struct dvtype	*dvnext;/* next node on the list	*/
 	};
 typedef	struct	dvtype	*dvptr;
 	dvptr	ftypes = NIL;		/* linked list of device types	*/
@@ -60,29 +97,40 @@ typedef	struct	dvtype	*dvptr;
 	dvptr	currtype = NIL;
 
 char	*ftout[] = 
-	       {"struct\tdevsw\t{\t\t\t/* device table entry */\n",
-	        "\tint\tdvnum;\n",
+		{"struct\tdevsw\t{\t\t\t/* device table entry */\n",
+		"\tint\tdvnum;\n",
 		"\tchar\t*dvname;\n",
-		"\tint\t(*dvinit)();\n",
-		"\tint\t(*dvopen)();\n",
-		"\tint\t(*dvclose)();\n",
-		"\tint\t(*dvread)();\n",
-		"\tint\t(*dvwrite)();\n",
-		"\tint\t(*dvseek)();\n",
-		"\tint\t(*dvgetc)();\n",
-		"\tint\t(*dvputc)();\n",
-		"\tint\t(*dvcntl)();\n",
-		"\tint\tdvcsr;\n",
-		"\tint\tdvivec;\n",
-		"\tint\tdvovec;\n",
-		"\tint\t(*dviint)();\n",
-		"\tint\t(*dvoint)();\n",
-		"\tchar\t*dvioblk;\n",
+		"\tint\t(*dvinit)(struct devsw *);\n",
+		"\tint\t(*dvopen)(struct devsw *, void *, void *);\n",
+		"\tint\t(*dvclose)(struct devsw *);\n",
+		"\tint\t(*dvread)(struct devsw *, unsigned char *, int);\n",
+		"\tint\t(*dvwrite)(struct devsw *, unsigned char *, int);\n",
+		"\tint\t(*dvseek)(struct devsw *, long);\n",
+		"\tint\t(*dvgetc)(struct devsw *);\n",
+		"\tint\t(*dvputc)(struct devsw *, unsigned char);\n",
+		"\tint\t(*dvcntl)(struct devsw *, int, void *, void *);\n",
+		"\tvoid\t*dvcsr;\n",
+//		"\tint\tdvivec;\n",
+//		"\tint\tdvovec;\n",
+		"\tvoid\t(*dviint)(void *);\n",
+		"\tvoid\t(*dvoint)(void *);\n",
+		"\tvoid\t*dvioblk;\n",
 		"\tint\tdvminor;\n",
 		"\t};\n\n",
 		"extern\tstruct\tdevsw devtab[];",
 		"\t\t/* one entry per device */\n\n",
 		NULL};
+
+int l_atoi(char *, int);
+void mktype(int);
+int cktname(int);
+void newattr(int, int);
+void mkdev(int, int, int);
+int ckdname(int);
+void prdef(FILE *, char *, int);
+int lookup(char *, int);
+void initattr(dvptr, int, int);
+
 %}
 %%
 config.input	:	devicetypes devicedescriptors
@@ -114,10 +162,17 @@ attribute.list	:	/**/
 		;
 attribute	:	CSR number
 					{newattr(CSR,$2);}
-		|	IVEC number
+//		|	IVEC number
+//					{newattr(IVEC,$2);}
+//		|	OVEC number
+//					{newattr(OVEC,$2);}
+		|	IVEC id
 					{newattr(IVEC,$2);}
-		|	OVEC number
+		|	OVEC id
 					{newattr(OVEC,$2);}
+//		|	IRQ number
+		|	IRQ id
+					{newattr(IRQ,$2 +IRQBASE);}
 		|	IINT id
 					{newattr(IINT,$2);}
 		|	OINT id
@@ -142,14 +197,7 @@ attribute	:	CSR number
 					{newattr(CNTL,$2);}
 		;
 number		:	INTEGER
-					/* Assume all input is octal */
-					/* for now; distinction is   */
-					/* made in lexical routines  */
-					/* just in case of change    */
-
-					{$$ = otoi(yytext,yyleng);}
-		|	OCTAL
-					{$$ = otoi(yytext,yyleng);}
+					{$$ = l_atoi(yytext,yyleng);}
 		;
 devicedescriptors	:	/**/
 		|	devicedescriptors descriptor
@@ -169,11 +217,12 @@ optional.on	:	/**/
 		;
 %%
 #include "lex.yy.c"
-main(argc, argv)
-	int	argc;
-	char	*argv[];
+
+void Strdup(char *, char *, int);
+
+int main(int argc, char	*argv[])
 {
-	int	n, i, j, l, fcount;
+	int	n, i, fcount;
 	dvptr	s;
 	int	verbose = 0;
 	char	*p;
@@ -217,7 +266,10 @@ main(argc, argv)
 		fprintf(stderr, "Can't write on %s\n", CONFIGC);
 		exit(1);
 	}
-
+	if ( (confisr=fopen(CONFIGCISR,"w") ) == NULL) {
+		fprintf(stderr, "Can't write on %s\n", CONFIGC);
+		exit(1);
+	}
 	if ( (confh=fopen(CONFIGH,"w") ) == NULL) {
 		fprintf(stderr, "Can't write on %s\n", CONFIGH);
 		exit(1);
@@ -226,8 +278,10 @@ main(argc, argv)
 		"/* conf.h (GENERATED FILE; DO NOT EDIT) */\n");
 	fprintf(confc,
 		"/* conf.c (GENERATED FILE; DO NOT EDIT) */\n");
-	fprintf(confc, "\n#include %s\n", CONFHREF);
-	fprintf(confh, "\n#define\tNULLPTR\t(char *)0\n");
+	fprintf(confisr,
+		"/* confisr.c (GENERATED FILE; Edits are overwritten by config) */\n");
+//	fprintf(confc, "\n#include %s\n", CONFHREF);
+//	fprintf(confh, "\n#define\tNULLPTR\t(void *)0\n");
 
 
 	if (verbose)
@@ -260,72 +314,101 @@ main(argc, argv)
 
 	nsym = 0;
 	for (s=devs; s!=NIL ; s=s->dvnext) {
-		lookup(s->dvinit,strlen(s->dvinit));
-		lookup(s->dvopen,strlen(s->dvopen));
-		lookup(s->dvclose,strlen(s->dvclose));
-		lookup(s->dvread,strlen(s->dvread));
-		lookup(s->dvwrite,strlen(s->dvwrite));
-		lookup(s->dvseek,strlen(s->dvseek));
-		lookup(s->dvcntl,strlen(s->dvcntl));
-		lookup(s->dvgetc,strlen(s->dvgetc));
-		lookup(s->dvputc,strlen(s->dvputc));
-		lookup(s->dviint,strlen(s->dviint));
-		lookup(s->dvoint,strlen(s->dvoint));
+		i=lookup(s->dvinit,strlen(s->dvinit));
+		symtab[i].symtype = INIT;
+		i=lookup(s->dvopen,strlen(s->dvopen));
+		symtab[i].symtype = OPEN;
+		i=lookup(s->dvclose,strlen(s->dvclose));
+		symtab[i].symtype = CLOSE;
+		i=lookup(s->dvread,strlen(s->dvread));
+		symtab[i].symtype = READ;
+		i=lookup(s->dvwrite,strlen(s->dvwrite));
+		symtab[i].symtype = WRITE;
+		i=lookup(s->dvseek,strlen(s->dvseek));
+		symtab[i].symtype = SEEK;
+		i=lookup(s->dvcntl,strlen(s->dvcntl));
+		symtab[i].symtype = CNTL;
+		i=lookup(s->dvgetc,strlen(s->dvgetc));
+		symtab[i].symtype = GETC;
+		i=lookup(s->dvputc,strlen(s->dvputc));
+		symtab[i].symtype = PUTC;
+		i=lookup(s->dviint,strlen(s->dviint));
+		symtab[i].symtype = IINT;
+		i=lookup(s->dvoint,strlen(s->dvoint));
+		symtab[i].symtype = OINT;
 		
 	}
 	fprintf(confh,
 		"/* Declarations of I/O routines referenced */\n\n");
-	for (i=0 ; i<nsym ; i++)
-		fprintf(confh, "extern\tint\t%s();\n", symtab[i].symname);
-
+	for (i=0 ; i<nsym ; i++) 
+		prdef(confh, symtab[i].symname, symtab[i].symtype);
 
 	/* produce devtab (giant I/O switch table) */
 
 	fprintf(confc, "\n/* device independent I/O switch */\n\n");
 	if (ndevs > 0) {
-		fprintf(confc, "struct\tdevsw\tdevtab[NDEVS] = {\n");
+		fprintf(confc, "struct\tdevsw\tdevtab[NDEVS] = {\n");		/**** OPEN ****/
 		fprintf(confc, "\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
 			"/*  Format of entries is:",
 			"device-number, device-name,",
 			"init, open, close,",
 			"read, write, seek,",
 			"getc, putc, cntl,",
-			"device-csr-address, input-vector, output-vector,",
-			"iint-handler, oint-handler, control-block, minor-device,",
+			"device-csr-address, iint-handler, oint-handler,",
+			"control-block, minor-device,",
 			"*/");
 	}
 	for (fcount=0,s=devs ; s!=NIL ; s=s->dvnext,fcount++) {
 		fprintf(confc, "\n/*  %s  is %s  */\n\n",s->dvname,s->dvtname);
-		fprintf(confc, "%d, \"%s\",\n", fcount, s->dvname);
-		fprintf(confc, "%s, %s, %s,\n",
+		fprintf(confc, "{%d, \"%s\",\n", fcount, s->dvname);		/***** OPEN BRACE ****/
+		fprintf(confc, "(void *)%s, (void *)%s, (void *)%s,\n",
 			s->dvinit, s->dvopen, s->dvclose);
-		fprintf(confc, "%s, %s, %s,\n",
+		fprintf(confc, "(void *)%s, (void *)%s, (void *)%s,\n",
 			s->dvread, s->dvwrite, s->dvseek);
-		fprintf(confc, "%s, %s, %s,\n",
+		fprintf(confc, "(void *)%s, (void *)%s, (void *)%s,\n",
 			s->dvgetc, s->dvputc, s->dvcntl);
-		fprintf(confc, "0%06o, 0%03o, 0%03o,\n",
-			s->dvcsr, s->dvivec, s->dvovec);
-		fprintf(confc, "%s, %s, NULLPTR, %d",
+		fprintf(confc, "(void *)0x%02X, ",
+			s->dvcsr);
+		fprintf(confc, "(void *)%s, (void *)%s,\nNULLPTR, %d",
 			s->dviint, s->dvoint, s->dvminor);
 		if ( s->dvnext != NIL )
-			fprintf(confc, ",\n");
+			fprintf(confc, "},\n");									/**** CLOSE BRACE ****/
 		else
-			fprintf(confc, "\n\t};");
+			fprintf(confc, "}\n\t};");								/**** CLOSE ****/
 	}
+/********** avr-Xinu *****************/
+	fprintf(confisr,
+			"\n\n/* Interrupt Service routines referenced */\n\n");
+	for (fcount =0,s=devs; s!=NIL ; s=s->dvnext,fcount++) {
+		if (strlen(s->dvivec) > 0) {
+			//			fprintf(confisr, "ISR(_VECTOR(%d))\n{\n", s->dvivec);
+			fprintf(confisr, "ISR(%s)\n{\n", s->dvivec);
+			fprintf(confisr, "\t%s(&%s[%d]);\n}\n", s->dviint, s->dvtname, s->dvminor);
+		}
+		if (strlen(s->dvovec) > 0 && strcmp(s->dvivec,s->dvovec) != 0) {
+			//			fprintf(confisr, "ISR(_VECTOR(%d))\n{\n", s->dvovec);
+			fprintf(confisr, "ISR(%s)\n{\n", s->dvovec);
+			fprintf(confisr, "\t%s(&%s[%d]);\n}\n", s->dvoint, s->dvtname, s->dvminor);
+		}
+	}		
+/********** avr-Xinu *****************/
+	
 
 	/* Copy definitions to output */
 
 	if (brkcount == 2 && verbose)
 		printf("Copying definitions to %s...\n", CONFIGH);
 	if (brkcount == 2 )
-		while ( (c=input()) != 0)	/* lex input routine */
+		while ( (c=input()) > 0)	/* lex input routine */
 			putc(c, confh);
 
-	/* guarantee conf.c written later than conf.c for make */
+	/* guarantee conf.c written later than conf.h for make */
 
 	fclose(confh);
 	fprintf(confc, "\n");
 	fclose(confc);
+	fprintf(confisr, "\n");
+	fclose(confisr);
 
 	/* finish up and write report for user if requested */
 
@@ -333,7 +416,7 @@ main(argc, argv)
 	    printf("\nConfiguration complete. Number of devs=%d:\n\n",ndevs);
 	    for (s=devs; s!=NIL ; s=s->dvnext)
 	      printf(
-	        "Device %s (on %s) csr=0%-7o, ivec=0%-3o, ovec=0%-3o, minor=%d\n",
+	        "Device %s (on %s) csr=0x%0X, ivec=%s, ovec=%s, minor=%d\n",
 		s->dvname, s->dvdevice, s->dvcsr, s->dvivec, s->dvovec,
 		s->dvminor);
 	}
@@ -342,19 +425,16 @@ main(argc, argv)
 }
 
 
-yyerror(s)
-	char *s;
+int yyerror(char *s)
 {
-	fprintf(stderr,"Syntax error in %s on line %d\n",
-		doing,linectr);
+	return (fprintf(stderr,"Syntax error in %s on line %d\n",
+		doing,linectr) );
 }
 
 
 /*  lookup  --  lookup a name in the symbol table; return position */
 
-lookup(str,len)
-	char	*str;
-	int	len;
+int lookup(char *str, int len)
 {
 	int	i;
 	char	*s;
@@ -363,7 +443,7 @@ lookup(str,len)
 		len = 19;
 		fprintf(stderr,"warning: name %s truncated\n",str);
 		}
-	s = malloc(len+1);
+	s = (char *)malloc(len+1);
 	strncpy(s,str,len);
 	s[len] = '\000';
 	for (i=0 ; i<nsym ; i++)
@@ -375,40 +455,40 @@ lookup(str,len)
 	return(nsym++);
 }
 
-atoi(str,len)
-	char *str;
-	int len;
+int
+l_atoi(p, len)
+char	*p;
+int	len;
 {
-	int i;
-	char c;
+	int	base, rv;
 
-	for (i=0; len > 0 ; len--) {
-		c = *str++;
-		i = 10*i + (c - '0');
-		}
-}
-otoi(str,len)
-	char *str;
-	int len;
-{
-	int i;
-	char c;
-
-	for (i=0; len > 0 ; len--) {
-		c = *str++;
-		if (c > '7')
-			fprintf(stderr,"invalid octal digit on line %d\n",
-				linectr);
+	if (*p == '0') {
+		++p; --len;
+		if (*p == 'x' || *p == 'X') {
+			++p; --len;		/* skip 'x' */
+			base = 16;
+		} else
+			base = 8;
+	} else
+		base = 10;
+	rv = 0;
+	for (; len > 0; ++p, --len) {
+		rv *= base;
+		if (isdigit(*p))
+			rv += *p - '0';
+		else if (isupper(*p))
+			rv += *p - 'A' + 10;
 		else
-			i = 8*i + (c - '0');
-		}
+			rv += *p - 'a' + 10;
+	}
+	return rv;
 }
 
-/* newattr -- add a new attribute spec to current type/device description	*/
+/* newattr(tok, val) -- add a new attribute spec to current type/device description	*/
+/* tok -> token type (attribute type)	*/
+/* val -> symbol number of value	*/
 
-newattr(tok,val)
-	int	tok;			/* token type (attribute type)	*/
-	int	val;			/* symbol number of value	*/
+void newattr(int tok, int val)			
 {
 	char	*c;
 	dvptr	s;
@@ -430,9 +510,14 @@ newattr(tok,val)
 
 	case CSR:	s->dvcsr = val;
 			break;
-	case IVEC:	s->dvivec = val;
+//	case IVEC:	s->dvivec = val;
+	case IVEC:	strcpy(s->dvivec,c);
 			break;
-	case OVEC:	s->dvovec = val;
+//	case OVEC:	s->dvovec = val;
+	case OVEC:	strcpy(s->dvovec,c);
+			break;
+	case IRQ:	strcpy(s->dvivec,c);
+			strcpy(s->dvovec,c);
 			break;
 	case IINT:	strcpy(s->dviint,c);
 			break;
@@ -462,8 +547,7 @@ newattr(tok,val)
 
 /* cktname  --  check type name for duplicates */
 
-cktname(symid)
-	int symid;
+int cktname(int symid)
 {
 	dvptr	s;
 extern	dvptr	ftypes;
@@ -482,8 +566,7 @@ extern	dvptr	ftypes;
 
 /* mktype  --  make a node in the type list and initialize to defaults	*/
 
-mktype(deviceid)
-	int deviceid;
+void mktype(int deviceid)
 {
 	dvptr	s,p;
 	char	*tn,*dn;
@@ -512,7 +595,7 @@ mktype(deviceid)
 
 /* initialize attributes in a type declaration node to typename...	*/
 
-initattr(fstr, tnum, deviceid)
+void initattr(fstr, tnum, deviceid)
 	dvptr	fstr;
 	int	tnum;
 	int	deviceid;
@@ -525,8 +608,10 @@ initattr(fstr, tnum, deviceid)
 	fstr->dvtnum = tnum;
 	fstr->dvdevice = symtab[deviceid].symname;
 	fstr->dvcsr = 0;
-	fstr->dvivec = 0;
-	fstr->dvovec = 0;
+//	fstr->dvivec = 0;
+	strcpy(fstr->dvivec,"");
+//	fstr->dvovec = 0;
+	strcpy(fstr->dvovec,"");
 	strcpy(fstr->dviint,typnam);
 	strcat(fstr->dviint,"iin");
 	strcpy(fstr->dvoint,typnam);
@@ -554,8 +639,7 @@ initattr(fstr, tnum, deviceid)
 
 /* mkdev  --  make a node on the device list */
 
-mkdev(nameid, typid, deviceid)
-	int	nameid, typid, deviceid;
+void mkdev(int nameid, int typid, int deviceid)
 {
 	dvptr	s;
 	char	*devn,*tn,*dn;
@@ -580,7 +664,7 @@ mkdev(nameid, typid, deviceid)
 	found = 0;
 	for (s=ftypes ; s != NULL ; s=s->dvnext)
 		if (s->dvtname == tn && (dn==NULL || s->dvdevice==dn)) {
-			strdup(lastdv,s,sizeof(struct dvtype));
+			Strdup((char *)lastdv,(char *)s,sizeof(struct dvtype));
 			found=1;
 			break;
 		}
@@ -597,8 +681,7 @@ mkdev(nameid, typid, deviceid)
 
 /* chdname  -- check for duplicate device name */
 
-ckdname(devid)
-	int devid;
+int ckdname(int devid)
 {
 	dvptr	s;
 extern	dvptr	devs;
@@ -615,10 +698,57 @@ extern	dvptr	devs;
 	return(devid);
 }
 
-strdup(tostr,fromstr,len)
-	char	*tostr, *fromstr;
-	int	len;
+void Strdup(char *tostr, char *fromstr, int len)
 {
 	for( ; len > 0 ; len--)
 		*tostr++ = *fromstr++;
 }
+
+void prdef(FILE *fp, char *name, int typ)
+{
+	/* special case for the everything function */
+/*	if (strcmp(name, "ioerr") == 0) {
+		fprintf(fp, "extern\tvoid\tioerr(void);\n");
+		return;
+	}
+	switch (typ) {
+	case IINT:
+		fprintf(fp, "extern\tvoid\t%s(void *);\n", name);
+		break;
+	case OINT:
+		fprintf(fp, "extern\tvoid\t%s(void *);\n", name);
+		break;
+	case READ:
+		fprintf(fp, "extern\tint\t%s(struct devsw *, unsigned char *, int);\n", name);
+		break;
+	case WRITE:
+		fprintf(fp, "extern\tint\t%s(struct devsw *, unsigned char *, int);\n", name);
+		break;
+	case GETC:
+		fprintf(fp, "extern\tint\t%s(struct devsw *);\n", name);
+		break;
+	case PUTC:
+		fprintf(fp, "extern\tint\t%s(struct devsw *, unsigned char);\n",
+			name);
+		break;
+	case OPEN:
+		fprintf(fp, "extern\tvoid *\t%s(struct devsw *, void *, void *);\n", name);
+		break;
+	case CLOSE:
+		fprintf(fp, "extern\tint\t%s(struct devsw *);\n", name);
+		break;
+	case INIT:
+		fprintf(fp, "extern\tint\t%s(struct devsw *);\n", name);
+		break;
+	case SEEK:
+		fprintf(fp, "extern\tint\t%s(struct devsw *, long);\n", name);
+		break;
+	case CNTL:
+		fprintf(fp, "extern\tint\t%s(struct devsw *, int, void *, void *);\n",
+			name);
+		break;
+	default:	fprintf(stderr, "Internal error 1\n");
+	}
+ */
+}
+
