@@ -130,6 +130,8 @@ int ckdname(int);
 void prdef(FILE *, char *, int);
 int lookup(char *, int);
 void initattr(dvptr, int, int);
+int yylex(void);
+int yyerror(char *);
 
 %}
 %%
